@@ -1,0 +1,14 @@
+# Frontend dependencies.
+#
+# Deliberately minimal. The Streamlit UI only renders whatever JSON the backend
+# returns - it does no market-data maths of its own. In particular it does NOT
+# need TA-Lib or pandas-ta, which live in App/api/requirements.txt where the
+# indicator calculations actually happen.
+#
+# Keeping TA-Lib out of this image matters: it is a C library with no reliable
+# prebuilt wheel, so including it here made the frontend container fail to
+# build for no benefit.
+
+streamlit>=1.28.0
+requests>=2.31.0
+pandas>=2.0.0

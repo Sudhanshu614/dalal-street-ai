@@ -21,7 +21,11 @@ RUN apt-get update && apt-get install -y \
 
 # --------------------------------------------------------------
 # Compile TA‑Lib from source (the official C library)
-RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+# Fetched over HTTPS and verified against the published SHA-256 of
+# ta-lib-0.4.0-src.tar.gz, so a tampered mirror fails the build.
+ARG TA_LIB_SHA256=9ff41efcb1c011a4b4b6dfc91610b06e39b1d7973ed5d4dee55029a0ac4dc651
+RUN wget https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    echo "${TA_LIB_SHA256}  ta-lib-0.4.0-src.tar.gz" | sha256sum -c - && \
     tar -xvzf ta-lib-0.4.0-src.tar.gz && \
     cd ta-lib && \
     ./configure --prefix=/usr && \

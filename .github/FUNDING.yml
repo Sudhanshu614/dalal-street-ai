@@ -1,0 +1,27 @@
+# Funding links for this repository.
+#
+# MAINTAINER: every field below is commented out on purpose. Nothing is
+# enabled until you uncomment a line and put a real account on it. Uncomment
+# only the platforms you actually have — a key left with a placeholder value
+# renders a broken "Sponsor" button on the repository page, which is worse
+# than no button at all. Delete the rest.
+#
+# github accepts up to four usernames as a list; every other key takes a
+# single username, and custom takes up to four URLs.
+#
+# Reference:
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# github: [username]
+# patreon: username
+# open_collective: project-name
+# ko_fi: username
+# tidelift: pypi/package-name
+# community_bridge: project-name
+# liberapay: username
+# issuehunt: username
+# lfx_mentorship: project-name
+# polar: username
+# buy_me_a_coffee: username
+# thanks_dev: u/gh/username
+# custom: ["https://example.com/donate"]

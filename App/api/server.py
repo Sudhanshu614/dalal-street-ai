@@ -8,7 +8,7 @@ All responses follow standardized format for frontend consumption
 Reference: FROM_SCRATCH_DOCS/FRONTEND_ARCHITECTURE.md Part 7
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from typing import Dict, List, Any, Optional
@@ -17,6 +17,7 @@ import ast
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig
 from datetime import datetime
+import secrets
 import sys
 import os
 import logging
@@ -30,7 +31,8 @@ from src.data_fetcher.universal_data_fetcher import UniversalDataFetcher
 from src.data_fetcher.bhavcopy_downloader import BhavcopyDownloader
 try:
     from src.data_fetcher.corporate_actions_ingester import CorporateActionsIngester
-except Exception:
+except ImportError:
+    # Optional component. /admin/update/corporate_actions returns 501 without it.
     CorporateActionsIngester = None
 from src.llm.function_declarations import FUNCTION_DECLARATIONS, SYSTEM_PROMPT
 from config import config
@@ -504,35 +506,34 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 80)
     logger.info("STOCK MARKET AI BACKEND - STARTING UP")
     logger.info("=" * 80)
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # Check if running on Render with persistent disk
-    if os.path.exists('/data/stock_market_new.db'):
-        db_path = '/data/stock_market_new.db'
-        print("Using Render persistent disk for database")
-    else:
-        # Check for minimal database first (for Render initial deployment)
-        minimal_db = os.path.join(project_root, 'database', 'stock_market_minimal.db')
-        full_db = os.path.join(project_root, 'database', 'stock_market_new.db')
-    
-        if os.path.exists(minimal_db) and not os.path.exists(full_db):
-            db_path = minimal_db
-            print(f"Using minimal starter database at: {db_path}")
-        else:
-            db_path = full_db
-            print(f"Using local database at: {db_path}")
-    csv_dir = os.path.join(project_root, 'database')
+    # Database location comes from config (DB_PATH env var, repo-relative default).
+    db_path = str(config.DB_PATH)
+    csv_dir = str(config.CSV_DIRECTORY)
+    logger.info(f"-> Database: {db_path}")
+    logger.info(f"-> CSV directory: {csv_dir}")
+    if not config.DB_PATH.exists():
+        message = (
+            f"Database not found at {db_path}.\n"
+            "Build a starter database with:\n"
+            "    python scripts/bootstrap_db.py --sample\n"
+            "or point DB_PATH at an existing file in your .env.\n"
+            "See docs/REBUILD.md for the full rebuild procedure."
+        )
+        logger.error(message)
+        raise FileNotFoundError(message)
     fetcher = UniversalDataFetcher(db_path, csv_dir)
     logger.info(f"-> Data fetcher ready (database: {fetcher.db_path})")
-    api_key = config.GEMINI_API_KEY
-    if not api_key:
-        logger.error("GEMINI_API_KEY not set. Backend cannot run without LLM. Set it in App/.env or environment.")
-        raise ValueError("GEMINI_API_KEY not configured")
+    try:
+        api_key = config.require_gemini_key()
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        raise
     genai.configure(api_key=api_key)
     logger.info("-> Gemini API configured")
-    
-    
+
+
     gemini_model = genai.GenerativeModel(
-        model_name='gemini-2.5-flash',
+        model_name=config.GEMINI_MODEL,
         tools=[{'function_declarations': FUNCTION_DECLARATIONS}],
         system_instruction=SYSTEM_PROMPT,
         generation_config=GenerationConfig(
@@ -542,7 +543,7 @@ async def lifespan(app: FastAPI):
             max_output_tokens=5000,  # Prevent runaway generation
         )
     )
-    logger.info(f"-> Gemini model ready (gemini-2.5-flash with {len(FUNCTION_DECLARATIONS)} functions)")
+    logger.info(f"-> Gemini model ready ({config.GEMINI_MODEL} with {len(FUNCTION_DECLARATIONS)} functions)")
     logger.info("BACKEND READY - Listening for requests...")
     print("=" * 80 + "\n")
     try:
@@ -570,7 +571,9 @@ app = FastAPI(
 # CORS middleware (allow frontend to call backend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production: specify exact origins
+    # Explicit origins only: "*" is invalid alongside allow_credentials=True.
+    # Configure via the CORS_ORIGINS env var (comma-separated).
+    allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -653,44 +656,6 @@ class ChatResponse(BaseModel):
 # ============================================================================
 # STARTUP/SHUTDOWN EVENTS
 # ============================================================================
-
-async def _startup_event_legacy():
-    """
-    Initialize global instances at server startup
-
-    Senior Dev: Initialize once, reuse across requests (efficient)
-    """
-    global fetcher, gemini_model
-
-    logger.info("=" * 80)
-    logger.info("STOCK MARKET AI BACKEND - STARTING UP")
-    logger.info("=" * 80)
-
-    logger.info("[1/3] Initializing UniversalDataFetcher...")
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    db_path = str(getattr(config, 'DB_PATH', os.path.join(project_root, 'database', 'stock_market_new.db')))
-    csv_dir = str(getattr(config, 'CSV_DIRECTORY', os.path.join(project_root, 'database')))
-    fetcher = UniversalDataFetcher(db_path, csv_dir)
-    logger.info(f"-> Data fetcher ready (database: {fetcher.db_path})")
-
-    logger.info("[2/3] Configuring Gemini API...")
-    api_key = config.GEMINI_API_KEY
-    if not api_key:
-        logger.error("GEMINI_API_KEY not set in config.py!")
-        raise ValueError("GEMINI_API_KEY not configured")
-    genai.configure(api_key=api_key)
-    logger.info("-> Gemini API configured")
-
-    logger.info("[3/3] Initializing Gemini model...")
-    gemini_model = genai.GenerativeModel(
-        model_name='gemini-2.5-flash',
-        tools=[{'function_declarations': FUNCTION_DECLARATIONS}],
-        system_instruction=SYSTEM_PROMPT
-    )
-    logger.info(f"-> Gemini model ready (gemini-2.5-flash with {len(FUNCTION_DECLARATIONS)} functions)")
-    logger.info("BACKEND READY - Listening for requests...")
-    print("=" * 80 + "\n")
-
 
 async def _shutdown_event_legacy():
     """Cleanup on server shutdown"""
@@ -862,7 +827,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
     try:
         # Use a separate model instance for validation to avoid chat history pollution
         validation_model = genai.GenerativeModel(
-            model_name='gemini-2.5-flash',
+            model_name=config.GEMINI_MODEL,
             generation_config=GenerationConfig(
                 temperature=0.0,  # Deterministic validation
                 response_mime_type="application/json"
@@ -1356,11 +1321,42 @@ async def list_functions():
     }
 
 
-@app.post("/admin/update/bhavcopy")
+# ============================================================================
+# ADMIN ENDPOINTS (bearer-token protected)
+# ============================================================================
+
+async def require_admin_token(
+    authorization: Optional[str] = Header(default=None),
+) -> None:
+    """
+    Guard the /admin/* endpoints with a shared bearer token.
+
+    Set ADMIN_TOKEN in the environment to enable them. When ADMIN_TOKEN is
+    empty (the default) the endpoints answer 404 rather than 403, so an
+    unconfigured deployment does not advertise that they exist.
+    """
+    if not config.ADMIN_TOKEN:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or malformed Authorization header. Expected: Bearer <token>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Compare as bytes: secrets.compare_digest rejects non-ASCII str inputs.
+    if not secrets.compare_digest(
+        token.strip().encode("utf-8"), config.ADMIN_TOKEN.encode("utf-8")
+    ):
+        raise HTTPException(status_code=403, detail="Invalid admin token")
+
+
+@app.post("/admin/update/bhavcopy", dependencies=[Depends(require_admin_token)])
 async def admin_update_bhavcopy(date: Optional[str] = None):
     try:
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(project_root, 'database', 'stock_market_new.db')
+        db_path = str(config.DB_PATH)
         downloader = BhavcopyDownloader(db_path)
         from datetime import datetime
         dt = datetime.strptime(date, '%Y-%m-%d') if date else None
@@ -1373,12 +1369,19 @@ async def admin_update_bhavcopy(date: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/admin/update/corporate_actions")
+@app.post("/admin/update/corporate_actions", dependencies=[Depends(require_admin_token)])
 async def admin_update_corporate_actions(limit: Optional[int] = None):
+    if CorporateActionsIngester is None:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Corporate actions ingestion is not available: "
+                "src.data_fetcher.corporate_actions_ingester could not be imported."
+            ),
+        )
     try:
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(project_root, 'database', 'stock_market_new.db')
-        csv_dir = os.path.join(project_root, 'database')
+        db_path = str(config.DB_PATH)
+        csv_dir = str(config.CSV_DIRECTORY)
         import glob
         files = sorted(glob.glob(os.path.join(csv_dir, 'CF-CA-*.csv')))
         csv_path = files[-1] if files else None
@@ -1393,7 +1396,7 @@ async def admin_update_corporate_actions(limit: Optional[int] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/admin/update/resolver_cache")
+@app.post("/admin/update/resolver_cache", dependencies=[Depends(require_admin_token)])
 async def admin_update_resolver_cache():
     try:
         if not fetcher:
@@ -1403,25 +1406,6 @@ async def admin_update_resolver_cache():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ============================================================================
-# RUN SERVER (For development)
-# ============================================================================
-
-if __name__ == "__main__":
-    import uvicorn
-
-    print("\n" + "=" * 80)
-    print("STARTING STOCK MARKET AI BACKEND (Development Mode)")
-    print("=" * 80 + "\n")
-
-    uvicorn.run(
-        "server:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="debug"
-    )
 
 # Configure structured logging to file and console
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1492,3 +1476,28 @@ def make_json_safe(obj):
             return None
         return obj
     return obj
+
+
+# ============================================================================
+# RUN SERVER (For development)
+#
+# Must stay at the very end of this module: everything above (the logger, the
+# middleware, the exception handler) has to be defined before we hand the app
+# to uvicorn.
+# ============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+
+    print("\n" + "=" * 80)
+    print("STARTING STOCK MARKET AI BACKEND")
+    print(f"Binding to http://{config.API_HOST}:{config.API_PORT}")
+    print("=" * 80 + "\n")
+
+    uvicorn.run(
+        "server:app",
+        host=config.API_HOST,
+        port=config.API_PORT,
+        reload=config.DEV_RELOAD,
+        log_level=config.LOG_LEVEL,
+    )

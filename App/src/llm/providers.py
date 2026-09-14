@@ -1,13 +1,36 @@
 """
 LLM Provider Abstraction Layer
 
-Senior Dev Architecture:
-- Provider interface for easy swapping between LLMs
+    ⚠️  NOT WIRED INTO THE REQUEST PATH - THIS MODULE IS CURRENTLY DEAD CODE.
+
+    Nothing in the running application imports this module. ``App/api/server.py``
+    - the only thing that actually serves chat requests - calls the
+    ``google.generativeai`` SDK directly and never constructs a provider.
+
+    Practical consequence: setting ``LLM_PROVIDER`` (in ``.env`` or the
+    environment) HAS NO EFFECT TODAY. ``LLM_PROVIDER=hybrid`` or
+    ``LLM_PROVIDER=groq`` is read into ``config`` and then silently ignored;
+    every request still goes to Gemini. Likewise ``GROQ_API_KEY`` is unused.
+
+    The code is kept rather than deleted because finishing this abstraction is a
+    tracked item in ``docs/ROADMAP.md`` ("Multi-provider LLM support that
+    actually works"). Until that lands, treat everything below as a reference
+    implementation, not as live behaviour.
+
+    Also note the model names here have drifted from the live configuration:
+      - ``GeminiProvider`` pins ``gemini-2.0-flash-exp``, while the server uses
+        ``config.GEMINI_MODEL`` (default ``gemini-2.5-flash``).
+      - ``GroqProvider`` pins ``llama-3.3-70b-versatile``, which nothing
+        validates against the Groq API's current model list.
+    Wiring this up must switch both to configuration values.
+
+Architecture:
+- Provider interface for swapping between LLMs
 - Gemini provider (battle-tested, reliable)
 - Groq provider (fast, 30x speed improvement)
 - Easy to add more providers (OpenAI, Anthropic, etc.)
 
-Usage:
+Intended usage (once wired up):
     provider = create_provider('groq')  # or 'gemini'
     result = provider.generate_function_call("What is the PE ratio of TCS?")
 """

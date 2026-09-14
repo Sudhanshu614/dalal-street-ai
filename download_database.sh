@@ -1,38 +1,58 @@
 #!/bin/bash
 set -euo pipefail
-BUCKET=${BUCKET:-dalal-street-database-storage}
+
+# Configuration
+# Project root: PROJECT_ROOT env var wins, otherwise the folder holding this script.
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+
+# GCS_BUCKET is required - there is no default bucket.
+BUCKET="${GCS_BUCKET:-}"
+if [ -z "$BUCKET" ]; then
+  echo "Error: GCS_BUCKET is not set. Export it to the name of your Cloud Storage bucket, e.g. GCS_BUCKET=my-market-db" >&2
+  exit 1
+fi
+
 OBJECT=${OBJECT:-stock_market_new.db}
-DEST=${DEST:-$HOME/data/stock_market_new.db}
+DEST=${DB_PATH:-$PROJECT_ROOT/App/database/stock_market_new.db}
+SERVICE=${BACKEND_SERVICE:-dalal-backend.service}
 TMP="$DEST.tmp"
+
+echo "Starting download..."
+echo "User: $(whoami)"
+echo "Destination: $DEST"
+
+# Ensure directory exists
 mkdir -p "$(dirname "$DEST")"
+
+# Download Database
 if command -v gsutil >/dev/null 2>&1; then
+  echo "Using gsutil..."
   gsutil -m cp "gs://$BUCKET/$OBJECT" "$TMP"
 elif command -v gcloud >/dev/null 2>&1; then
+  echo "Using gcloud storage..."
   gcloud storage cp "gs://$BUCKET/$OBJECT" "$TMP"
 else
-  echo "No gsutil/gcloud found"; exit 1
-fi
-mv -f "$TMP" "$DEST"
-ls -lh "$DEST"
-if [ "${FETCH_CFCA:-0}" = "1" ]; then
-  mkdir -p "$HOME/data"
-  if command -v gsutil >/dev/null 2>&1; then
-    gsutil -m cp "gs://$BUCKET/CF-CA*.csv" "$HOME/data/" || true
-  else
-    gcloud storage cp "gs://$BUCKET/CF-CA*.csv" "$HOME/data/" || true
-  fi
-  ls -lh "$HOME"/data/CF-CA*.csv 2>/dev/null || true
+  echo "Error: Neither gsutil nor gcloud found"
+  exit 1
 fi
 
-# Copy to repository path if it exists (for Docker volume mount)
-REPO_DB="$HOME/dalal-street-ai-/App/database/stock_market_new.db"
-if [ -d "$(dirname "$REPO_DB")" ]; then
-  cp -f "$DEST" "$REPO_DB"
-  echo "Updated repo database at $REPO_DB"
+# Atomic move
+mv "$TMP" "$DEST"
+echo "Database downloaded successfully."
+
+# Download CF-CA CSVs if requested
+if [ "${FETCH_CFCA:-0}" -eq 1 ]; then
+    echo "Downloading CF-CA CSVs..."
+    CSV_DEST=$(dirname "$DEST")
+    if command -v gsutil >/dev/null 2>&1; then
+        gsutil -m cp "gs://$BUCKET/CF-CA*.csv" "$CSV_DEST/" || true
+    else
+        gcloud storage cp "gs://$BUCKET/CF-CA*.csv" "$CSV_DEST/" || true
+    fi
 fi
 
-REPO_DATA="$HOME/dalal-street-ai-/App/database"
-if [ "${FETCH_CFCA:-0}" = "1" ] && [ -d "$REPO_DATA" ]; then
-  cp -f "$HOME"/data/CF-CA*.csv "$REPO_DATA/"
-  echo "Updated repo CF-CA CSVs at $REPO_DATA"
-fi
+# Restart Backend Service
+echo "Restarting backend service ($SERVICE)..."
+sudo systemctl restart "$SERVICE"
+sudo systemctl status "$SERVICE" --no-pager
+echo "Service restarted."

@@ -7,8 +7,29 @@ param(
     [switch]$PreflightOnly = $false
 )
 
-$LOG_FILE = "e:\Dalal Street Trae\update_log.txt"
+# Project root: PROJECT_ROOT env var wins, otherwise the folder holding this script.
+$ProjectRoot = if ($env:PROJECT_ROOT) { $env:PROJECT_ROOT } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+# Remote deployment targets are environment-specific; no defaults are baked in.
+$GCE_INSTANCE = $env:GCE_INSTANCE
+$GCE_ZONE = $env:GCE_ZONE
+$DOCKER_CONTAINER = if ($env:DOCKER_CONTAINER) { $env:DOCKER_CONTAINER } else { "dalal-backend" }
+
+$DB_PATH = if ($env:DB_PATH) { $env:DB_PATH } else { Join-Path $ProjectRoot "App\database\stock_market_new.db" }
+$CSV_DIRECTORY = if ($env:CSV_DIRECTORY) { $env:CSV_DIRECTORY } else { Join-Path $ProjectRoot "App\database" }
+$LOG_FILE = Join-Path $ProjectRoot "update_log.txt"
 $DATE = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+function Assert-DeployTargets {
+    if (-not $GCE_INSTANCE) {
+        Write-Host "[ERROR] GCE_INSTANCE is not set. Export it to the name of your Compute Engine VM." -ForegroundColor Red
+        exit 1
+    }
+    if (-not $GCE_ZONE) {
+        Write-Host "[ERROR] GCE_ZONE is not set. Export it to the VM's zone, e.g. GCE_ZONE=us-central1-a" -ForegroundColor Red
+        exit 1
+    }
+}
 
 function Write-Log {
     param($Message, $Color = "White")
@@ -32,6 +53,8 @@ function Run-PreflightCheck {
     Write-Log "[PREFLIGHT] Validating environment and prerequisites" "Cyan"
     Write-Log ""
 
+    Assert-DeployTargets
+
     try {
         $gcloudVersion = & gcloud --version 2>$null
         if ($LASTEXITCODE -ne 0) { Write-Log "[ERROR] gcloud not found" "Red"; throw }
@@ -45,7 +68,7 @@ function Run-PreflightCheck {
 
         if (-not (Test-Path "$env:USERPROFILE\.ssh\google_compute_engine")) { Write-Log "[WARN] SSH private key missing: google_compute_engine" "Yellow" }
         if (-not (Test-Path "$env:USERPROFILE\.ssh\google_compute_engine.pub")) { Write-Log "[WARN] SSH public key missing: google_compute_engine.pub" "Yellow" }
-        & gcloud compute ssh dalal-street-backend --zone=us-central1-a --command="echo ok" | Out-Null
+        & gcloud compute ssh $GCE_INSTANCE --zone=$GCE_ZONE --command="echo ok" | Out-Null
         if ($LASTEXITCODE -eq 0) { Write-Log "[OK] SSH to VM works (non-interactive)" }
         else { Write-Log "[ERROR] SSH to VM failed (check keys or project/zone)" "Red" }
 
@@ -57,24 +80,24 @@ function Run-PreflightCheck {
         if (-not $gsu) { Write-Log "[ERROR] gsutil not found on PATH" "Red"; throw }
         else { Write-Log ("[OK] gsutil: {0}" -f $gsu.Path) }
 
-        $dbOk = Test-Path "e:\Dalal Street Trae\App\database\stock_market_new.db"
+        $dbOk = Test-Path $DB_PATH
         Write-Log ("[DB] stock_market_new.db present: {0}" -f $dbOk)
-        $smOk = Test-Path "e:\Dalal Street Trae\App\database\stock_master.csv"
+        $smOk = Test-Path (Join-Path $CSV_DIRECTORY "stock_master.csv")
         Write-Log ("[CSV] stock_master.csv present: {0}" -f $smOk)
-        $xlOk = Test-Path "e:\Dalal Street Trae\App\database\Company_Name_Changes_NSE.xlsx"
+        $xlOk = Test-Path (Join-Path $CSV_DIRECTORY "Company_Name_Changes_NSE.xlsx")
         Write-Log ("[Excel] Company_Name_Changes_NSE.xlsx present: {0}" -f $xlOk)
-        $ipoFiles = Get-ChildItem -Path "e:\Dalal Street Trae\App\database" -Filter "IPO-PastIssue-*.csv" -ErrorAction SilentlyContinue
+        $ipoFiles = Get-ChildItem -Path $CSV_DIRECTORY -Filter "IPO-PastIssue-*.csv" -ErrorAction SilentlyContinue
         Write-Log ("[CSV] IPO-PastIssue-*.csv files: {0}" -f ($ipoFiles.Count))
-        $cfcaFiles = Get-ChildItem -Path "e:\Dalal Street Trae\App\database" -Filter "CF-CA*.csv" -ErrorAction SilentlyContinue
+        $cfcaFiles = Get-ChildItem -Path $CSV_DIRECTORY -Filter "CF-CA*.csv" -ErrorAction SilentlyContinue
         Write-Log ("[CSV] CF-CA*.csv files: {0}" -f ($cfcaFiles.Count))
 
-        & gcloud compute ssh dalal-street-backend --zone=us-central1-a --command="test -x ~/download_database.sh"
+        & gcloud compute ssh $GCE_INSTANCE --zone=$GCE_ZONE --command="test -x ~/download_database.sh"
         if ($LASTEXITCODE -eq 0) { Write-Log "[OK] VM script ~/download_database.sh is executable" }
         else { Write-Log "[ERROR] VM script missing or not executable" "Red" }
 
-        & gcloud compute ssh dalal-street-backend --zone=us-central1-a --command="docker ps --format '{{.Names}}' | grep -x dalal-backend"
-        if ($LASTEXITCODE -eq 0) { Write-Log "[OK] Docker container 'dalal-backend' found" }
-        else { Write-Log "[ERROR] Docker container 'dalal-backend' not found" "Red" }
+        & gcloud compute ssh $GCE_INSTANCE --zone=$GCE_ZONE --command="docker ps --format '{{.Names}}' | grep -x $DOCKER_CONTAINER"
+        if ($LASTEXITCODE -eq 0) { Write-Log ("[OK] Docker container '{0}' found" -f $DOCKER_CONTAINER) }
+        else { Write-Log ("[ERROR] Docker container '{0}' not found" -f $DOCKER_CONTAINER) "Red" }
 
         Write-Log ""
         Write-Log "[PREFLIGHT] Completed" "Green"
@@ -89,15 +112,17 @@ if ($PreflightOnly) {
     exit 0
 }
 
+Assert-DeployTargets
+
 # Step 1: Run scraping (optional)
 if (-Not $SkipScraping) {
     Write-Log "[STEP 1/3] Running data scraping..." "Green"
     Write-Log ""
-    
-    cd "e:\Dalal Street Trae"
+
+    Set-Location $ProjectRoot
     $runDate = if ($Date) { $Date } else { Get-Date -Format "yyyy-MM-dd" }
     Write-Log ("Running authoritative runner for date: {0}" -f $runDate) "Yellow"
-    python App\scriptsrebuild\AUTHORITATIVE_DAILY_RUNNER.py --date $runDate
+    python (Join-Path $ProjectRoot "App\scriptsrebuild\AUTHORITATIVE_DAILY_RUNNER.py") --date $runDate
     
     if ($LASTEXITCODE -eq 0) {
         Write-Log "✓ Scraping completed successfully" "Green"
@@ -115,7 +140,7 @@ if (-Not $SkipScraping) {
 Write-Log "[STEP 2/3] Uploading to Cloud Storage..." "Green"
 Write-Log ""
 
-& "e:\Dalal Street Trae\upload_database_to_cloud.ps1"
+& (Join-Path $ProjectRoot "upload_database_to_cloud.ps1")
 
 if ($LASTEXITCODE -ne 0) {
     Write-Log "❌ Upload failed - aborting" "Red"
@@ -129,7 +154,7 @@ Write-Log "[STEP 3/3] Updating production VM..." "Green"
 Write-Log ""
 
 # SSH into VM and run update script
-gcloud compute ssh dalal-street-backend --zone=us-central1-a --command="~/download_database.sh"
+gcloud compute ssh $GCE_INSTANCE --zone=$GCE_ZONE --command="~/download_database.sh"
 
 if ($LASTEXITCODE -eq 0) {
     Write-Log ""
@@ -144,7 +169,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Log "Testing production backend..." "Yellow"
     
     # Get VM external IP
-    $VM_IP = gcloud compute instances describe dalal-street-backend --zone=us-central1-a --format="get(networkInterfaces[0].accessConfigs[0].natIP)"
+    $VM_IP = gcloud compute instances describe $GCE_INSTANCE --zone=$GCE_ZONE --format="get(networkInterfaces[0].accessConfigs[0].natIP)"
     
     Write-Log "Production URL: http://$VM_IP:8000/health" "Cyan"
     

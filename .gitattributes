@@ -1,5 +1,26 @@
-# Ensure database files are treated as binary (not text)
-*.db binary
+# Normalise line endings. The repository was developed on Windows and had
+# CRLF throughout, which made every diff look like a full-file rewrite.
+# After changing this, run once:  git add --renormalize .
+* text=auto eol=lf
 
-# Ensure minimal database is not corrupted by line ending conversions
-App/database/stock_market_minimal.db binary
+# Windows-native scripts keep CRLF
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Shell scripts must be LF or they will not execute on Linux
+*.sh   text eol=lf
+
+# Binary — never touch
+*.db      binary
+*.sqlite  binary
+*.xlsx    binary
+*.png     binary
+*.jpg     binary
+*.parquet binary
+*.gz      binary
+*.zip     binary
+
+# Keep generated and reference material out of language stats
+docs/notes/**     linguist-documentation
+tests/fixtures/** linguist-generated

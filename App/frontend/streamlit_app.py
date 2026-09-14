@@ -188,6 +188,55 @@ def show_header():
                 st.rerun()
 
 
+def show_setup_help():
+    """
+    First-run guidance shown when the backend cannot be reached.
+
+    This is the screen a brand-new user hits, so it must name the actual causes
+    rather than just reporting "disconnected". A backend that refuses to start
+    is almost always one of two things: no Gemini API key, or no database.
+    """
+    st.error(f"Cannot reach the backend at `{API_BASE_URL}`")
+
+    st.markdown(
+        "**This is expected on a fresh clone.** The backend needs two things "
+        "before it will start, and neither ships with the repository."
+    )
+
+    st.markdown("#### 1. A Gemini API key")
+    st.markdown(
+        "The app sends your question to Google Gemini to work out what you are asking. "
+        "Get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then:"
+    )
+    st.code("cp .env.example .env      # Windows: Copy-Item .env.example .env\n"
+            "# open .env and set GEMINI_API_KEY=your-key-here", language="bash")
+
+    st.markdown("#### 2. A database")
+    st.markdown(
+        "The repository ships no market data — see `docs/DATA.md` for why. Build one:"
+    )
+    st.code("python scripts/bootstrap_db.py --sample     # small, a few minutes\n"
+            "python scripts/verify_db.py                 # confirm it worked", language="bash")
+    st.caption("For the full 30-year warehouse, follow `docs/REBUILD.md`.")
+
+    st.markdown("#### 3. Start the backend")
+    st.code("python -m uvicorn App.api.server:app --host 127.0.0.1 --port 8000", language="bash")
+    st.markdown(
+        "Read the backend's terminal output — if something is missing it says exactly what. "
+        "Then reload this page."
+    )
+
+    st.divider()
+    st.caption(
+        "Still stuck? Open an issue: "
+        "https://github.com/Sudhanshu614/dalal-street-ai/issues"
+    )
+
+    if st.button("Retry connection"):
+        st.session_state.backend_healthy = None
+        st.rerun()
+
+
 def show_backend_status():
     """
     Show backend connection status
@@ -200,11 +249,12 @@ def show_backend_status():
         st.sidebar.error("❌ Backend Disconnected")
         st.sidebar.warning(
             f"Cannot connect to backend at {API_BASE_URL}. "
-            "Please start the API server:\n\n"
+            "Start the API server from the repository root:\n\n"
             "```bash\n"
-            "cd api\n"
-            "python server.py\n"
-            "```"
+            "python -m uvicorn App.api.server:app --port 8000\n"
+            "```\n\n"
+            "If it exits immediately, read its output — a missing "
+            "`GEMINI_API_KEY` or database is the usual cause."
         )
 
 
@@ -248,7 +298,7 @@ def show_initial_ui():
 
 def show_disclaimer_dialog():
     st.caption(
-        "This AI chatbot is powered by Sudhanshu & Gemini and public market information. Answers may be inaccurate. Do not enter private or regulated data."
+        "Powered by Google Gemini and 30 years of NSE market data. Answers may be inaccurate. Do not enter private or regulated data."
     )
 
 
@@ -315,11 +365,10 @@ def show_chat_interface():
             st.session_state.prev_question_timestamp = now
             if delta < 3:
                 time.sleep(3 - delta)
-        with st.spinner("Researching..."):
-            pass
         with st.chat_message('assistant'):
             st.caption("Thinking...")
-        response = send_chat_message(user_sanitized, st.session_state.conversation_history)
+        with st.spinner("Researching..."):
+            response = send_chat_message(user_sanitized, st.session_state.conversation_history)
         st.session_state.prev_response_timestamp = datetime.now()
 
         # Add assistant response to conversation
@@ -430,7 +479,13 @@ def main():
 
     show_header()
 
-    # No sidebar
+    # If the backend is unreachable, say why in the page itself rather than
+    # letting the user type a question into a dead app. The two causes that
+    # account for nearly every first-run failure are a missing API key and a
+    # missing database, so name both explicitly.
+    if st.session_state.backend_healthy is False:
+        show_setup_help()
+        st.stop()
 
     # Main UI: Initial view vs Chat view
     user_first_interaction = bool(st.session_state.initial_question or st.session_state.selected_suggestion)

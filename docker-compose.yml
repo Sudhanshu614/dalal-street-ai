@@ -1,0 +1,80 @@
+# ============================================================================
+# Dalal Street AI - local stack
+#
+#   docker compose up --build
+#
+# Two things must exist before this works:
+#
+#   1. A .env file at the repository root.
+#         cp .env.example .env      # then add your GEMINI_API_KEY
+#      No secrets are defined here; everything sensitive comes from .env.
+#
+#   2. A database at App/database/stock_market_new.db, which is bind-mounted
+#      into the api container at /data. The repository ships no database.
+#         python scripts/bootstrap_db.py --sample
+#      or build the full warehouse - see docs/REBUILD.md.
+#      Check what you built with: python scripts/verify_db.py
+#
+# Then open http://localhost:8501 (frontend). The API is on
+# http://localhost:8000, with interactive docs at /docs.
+# ============================================================================
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: App/api/Dockerfile
+    image: dalal-street-api
+    container_name: dalal-street-api
+    env_file:
+      - .env
+    environment:
+      # Bind inside the container, not on the host loopback, or nothing can
+      # reach it. This overrides API_HOST from .env on purpose.
+      API_HOST: "0.0.0.0"
+      API_PORT: "8000"
+      # The database is mounted at /data, not at its host path.
+      DB_PATH: /data/stock_market_new.db
+      CSV_DIRECTORY: /data
+      # The browser talks to the frontend on 8501, so that origin must be
+      # allowed. Add your own origins here, comma-separated.
+      CORS_ORIGINS: "http://localhost:8501,http://127.0.0.1:8501"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # Read-write so the daily-update scripts can be run inside the
+      # container. Drop the trailing :rw (use :ro) if you want the database
+      # protected from writes.
+      - ./App/database:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      # TA-Lib and the model client make the first boot slow.
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: App/frontend/Dockerfile
+    image: dalal-street-frontend
+    container_name: dalal-street-frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Service name, not localhost: inside the compose network the API is
+      # reachable as "api". This overrides API_BASE_URL from .env.
+      API_BASE_URL: http://api:8000
+      STREAMLIT_SERVER_PORT: "8501"
+      STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
+      STREAMLIT_SERVER_HEADLESS: "true"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8501:8501"
+    restart: unless-stopped

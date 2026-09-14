@@ -1,0 +1,76 @@
+version: 2
+
+updates:
+  # --- Python dependencies -----------------------------------------------
+  # Three requirements files, in two directories:
+  #
+  #   /requirements.txt          streamlit, requests, pandas, pandas-ta, TA-Lib
+  #   /requirements-dev.txt      pytest, pytest-cov, ruff, pandas, python-dotenv, pip-audit
+  #   /App/api/requirements.txt  fastapi, uvicorn, pydantic, scipy, google-generativeai, nselib
+  #
+  # Dependabot scans a directory, not a file, and does not recurse — so the
+  # root entry covers the first two and App/api needs to be listed explicitly.
+  #
+  # Two things it will not manage, and that is expected:
+  #   - jugaad-data is installed from a git+https URL, which pip ecosystem
+  #     support does not resolve. Bump it by hand.
+  #   - TA-Lib ships no wheels and needs a C toolchain, so resolution for
+  #     requirements.txt can fail on Dependabot's runner the same way it does
+  #     in the non-blocking pip-audit job in ci.yml.
+  - package-ecosystem: "pip"
+    directories:
+      - "/"
+      - "/App/api"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    labels:
+      - "dependencies"
+    groups:
+      # One pull request a week for everything routine. Majors stay separate
+      # because they are the ones that need a human to read a changelog.
+      python-minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Security fixes are grouped too, but arrive on their own schedule.
+      python-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # --- GitHub Actions ----------------------------------------------------
+  # Covers every action pinned in .github/workflows/ — actions/checkout,
+  # actions/setup-python and gitleaks/gitleaks-action.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "ci"
+    groups:
+      actions-minor-and-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

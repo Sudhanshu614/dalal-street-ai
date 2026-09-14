@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Cancel superseded runs on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install development dependencies
+        # requirements-dev.txt deliberately excludes TA-Lib, pandas-ta,
+        # streamlit, jugaad-data and nselib. TA-Lib needs its C library built
+        # from source, which would add minutes to every run and break whenever
+        # the toolchain shifts. The test suite loads ticker_resolver.py and
+        # generic_query_builder.py by file path so that
+        # App/src/data_fetcher/__init__.py - which does pull that chain in -
+        # is never executed. See tests/conftest.py.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        # Non-blocking for now: the existing codebase has not been linted yet.
+        # FLIP THIS TO BLOCKING (delete the continue-on-error line) once
+        # `ruff check .` is clean - otherwise the job is decoration.
+        continue-on-error: true
+        run: ruff check .
+
+      - name: Run tests
+        # No API key, no network, no 3.9 GB database. The suite builds a tiny
+        # synthetic SQLite fixture at runtime; anything that needs the real
+        # thing is marked @pytest.mark.integration and skipped by default.
+        run: pytest tests/ -v --tb=short
+
+      - name: Coverage report
+        # Traced across App/, then reported only for the modules this suite
+        # actually targets. Coverage's --cov cannot take a single file, and
+        # naming the modules by import path (App.src.data_fetcher.*) would
+        # make coverage import the package - dragging in the TA-Lib chain the
+        # rest of this job carefully avoids.
+        run: |
+          pytest tests/ -q --cov=App --cov-report=
+          coverage report --show-missing \
+            --include="App/config.py,App/src/data_fetcher/ticker_resolver.py,App/src/data_fetcher/generic_query_builder.py"
+
+  dependency-audit:
+    name: Dependency audit (non-blocking)
+    runs-on: ubuntu-latest
+    # Advisory only. A new CVE in a transitive dependency should not block an
+    # unrelated pull request, but it must be visible in the checks list.
+    continue-on-error: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Audit the installed environment
+        # Audits everything actually resolved into the environment - pandas,
+        # python-dotenv, pytest, ruff and their transitive dependencies.
+        run: pip-audit --strict --progress-spinner off
+
+      - name: Audit runtime requirements
+        # Best effort. requirements.txt pins TA-Lib, which ships no wheels, so
+        # dependency resolution can fail on a runner with no C toolchain. Kept
+        # separate and non-fatal so that failure mode does not mask a real CVE
+        # finding from the step above.
+        continue-on-error: true
+        run: pip-audit --requirement requirements.txt --progress-spinner off
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    # This repository has had credentials sitting on disk before. A scanner on
+    # every push is the permanent guard against that recurring.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Full history: a secret committed earlier and deleted later is still
+          # a leaked secret. A shallow clone would miss it.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Free for public repositories and personal accounts. If this project
+          # ever moves under a GitHub organisation, add a GITLEAKS_LICENSE
+          # repository secret or the action will refuse to run.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

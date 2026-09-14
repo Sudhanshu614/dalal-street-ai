@@ -1,12 +1,35 @@
 """
 Function Declarations for Gemini Function Calling
 
-This module defines the 4 universal operations as function declarations
-for Gemini's native function calling API.
+This module defines the universal operations exposed to Gemini's native
+function calling API, plus the system prompt that ships alongside them.
 
-Reference: FROM_SCRATCH_DOCS/LLM_INTEGRATION_COMPLETE_GUIDE.md:170-319
-Philosophy: These 4 functions handle infinite query combinations (zero hardcoding)
+Two things live here:
+
+1. ``FUNCTION_DECLARATIONS`` - the tool schemas handed to the model.
+2. The system prompt. The database portion of that prompt is NOT hardcoded:
+   ``build_schema_section()`` introspects the live SQLite file (read-only) and
+   emits the table/column/row-count listing. A hardcoded copy used to live here
+   and drifted badly - it advertised tables that had been dropped, which made
+   the model emit ``query_stocks(table=...)`` calls that failed with
+   ``ValueError: Unknown table``. Generating it removes that whole failure mode.
+
+Entry points:
+    build_schema_section(db_path)   -> just the "DATA SOURCE 1" block
+    build_system_prompt(db_path)    -> the full system prompt
+    SYSTEM_PROMPT                   -> module attribute, built lazily on first
+                                       access using ``config.DB_PATH``. Kept for
+                                       backwards compatibility with existing
+                                       ``from ... import SYSTEM_PROMPT`` callers.
+
+Philosophy: a small set of generic functions handles infinite query
+combinations (zero hardcoding).
 """
+
+import sqlite3
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 FUNCTION_DECLARATIONS = [
     {
@@ -67,33 +90,34 @@ FUNCTION_DECLARATIONS = [
         - Quarterly results ("INFY Q4 results") → use table='quarterly_results'
         - Annual financials ("TCS annual revenue") → use table='annual_financials'
 
-        Available tables (ALL 16 dynamically discovered):
+        The AUTHORITATIVE table list (with exact column names and row counts) is
+        in the system prompt, under "DATA SOURCE 1: SQLITE DATABASE". That block
+        is generated from the live database at startup. Use ONLY table names that
+        appear there - any other name is rejected with "Unknown table".
+
+        Commonly used tables:
         - fundamentals: Current stock metrics (DEFAULT - use for most queries)
-        - daily_ohlc: Historical daily prices (10+ years, 6.1M records)
+        - daily_ohlc: Historical daily prices (10+ years)
         - quarterly_results: Quarterly financial statements
         - annual_financials: Annual financial data
         - market_indices: Index data (Nifty, Sensex, etc.)
+        - market_etfs: ETF price history
         - fii_dii_data: Foreign/Domestic institutional data
         - ipo_data: IPO listings and performance
-        - stock_aliases: Company name changes/demergers
-        - corporate_actions: Dividends, bonuses, splits
+        - corporate_events: Dividends, bonuses, splits, buybacks
+        - name_change_events: Company name changes
+        - symbol_change_events: Ticker symbol changes
+        - delisting_events: Delistings and suspensions
         - stocks_master: Master stock list
-        - bulk_deals: Bulk transaction data
-        - block_deals: Block transaction data
-        - india_vix: Volatility index
-        - download_log: Data update logs
-        - metadata: System metadata
-        - sqlite_sequence: Auto-generated
 
-        Works for ANY table, ANY filter combination.
-        The system discovers all tables dynamically - use any table name from above.
+        Works for ANY listed table, ANY filter combination.
         """,
         "parameters": {
             "type": "object",
             "properties": {
                 "table": {
                     "type": "string",
-                    "description": "Which table to query (default: fundamentals). Can be ANY of the 16 tables listed above. System validates dynamically."
+                    "description": "Which table to query (default: fundamentals). Must be one of the tables listed in the system prompt's DATA SOURCE 1 schema block. System validates against the live database."
                 },
                 "filters": {
                     "type": "object",
@@ -253,61 +277,160 @@ FUNCTION_DECLARATIONS = [
 ]
 
 
-# System prompt for display formatting (separate from function calling)
-SYSTEM_PROMPT = """You are an Indian Stock Market AI Assistant with COMPLETE access to 4 data sources.
+# ---------------------------------------------------------------------------
+# Live schema introspection
+#
+# The "DATA SOURCE 1" block below used to be a hardcoded dump. It drifted from
+# the real database and started advertising tables that no longer existed, so
+# the model happily emitted query_stocks(table='<dropped table>') calls that
+# blew up downstream. It is now generated from the database itself.
+# ---------------------------------------------------------------------------
 
-═══════════════════════════════════════════════════════════════════════════
-📊 DATA SOURCE 1: SQLITE DATABASE (16 Tables, 195 Fields)
-═══════════════════════════════════════════════════════════════════════════
+_RULE = "═" * 75
 
-Table: stocks_master (2,184 rows, 11 columns)
-Fields: symbol, company_name, listing_date, face_value, isin, series, is_active, is_fno, is_nifty50, created_at, updated_at
+# Sentinel spliced into SYSTEM_PROMPT_TEMPLATE. Deliberately substituted with
+# str.replace() rather than str.format(): the prompt is full of literal braces
+# (e.g. filters={'symbol': 'TCS'}) that format() would choke on.
+SCHEMA_PLACEHOLDER = "{schema_section}"
 
-Table: fundamentals (2,183 rows, 40 columns)
-Fields: symbol, company_name, market_cap, current_price, week52_high, week52_low, pe_ratio, pb_ratio, book_value, face_value, dividend_yield, roe, roce, eps, promoter_holding, fii_holding, dii_holding, data_source, last_updated, created_at, industry, sector, subsector, business_segment, returns_1month, returns_3month, returns_6month, returns_1year, returns_3year, returns_5year, sales_growth_3year, sales_growth_5year, sales_growth_10year, profit_growth_3year, profit_growth_5year, profit_growth_10year, eps_growth_3year, eps_growth_5year, debt_to_equity, total_deposits
+# Tables listed first, in this order, so the most useful ones stay at the top of
+# the prompt. Anything not named here is appended alphabetically, which means a
+# newly added table shows up automatically instead of silently going missing.
+_TABLE_PRIORITY = (
+    "stocks_master",
+    "fundamentals",
+    "daily_ohlc",
+    "quarterly_results",
+    "annual_financials",
+    "corporate_events",
+    "market_indices",
+    "market_etfs",
+    "fii_dii_data",
+    "ipo_data",
+    "name_change_events",
+    "symbol_change_events",
+    "delisting_events",
+    "bhavcopy_history",
+    "download_log",
+    "metadata",
+)
 
-Table: daily_ohlc (6,124,308 rows, 11 columns)
-Fields: id, symbol, date, open, high, low, close, volume, prev_close, data_source, created_at
+_SCHEMA_UNAVAILABLE = f"""{_RULE}
+📊 DATA SOURCE 1: SQLITE DATABASE (schema unavailable)
+{_RULE}
 
-Table: quarterly_results (20,973 rows, 18 columns)
-Fields: id, symbol, quarter, quarter_date, sales, other_income, expenses, operating_profit, opm_percent, interest, depreciation, profit_before_tax, tax_percent, net_profit, eps, data_source, last_updated, created_at
+The database could not be opened, so the table listing is not available in this
+session. Do NOT guess table or column names. If a query needs database tables,
+tell the user the local database is unreachable instead of inventing a schema.
+"""
 
-Table: annual_financials (18,565 rows, 28 columns)
-Fields: id, symbol, year, year_end_date, sales, expenses, operating_profit, other_income, interest, depreciation, profit_before_tax, tax, net_profit, eps, equity_capital, reserves, borrowings, total_liabilities, fixed_assets, investments, total_assets, cash_from_operating, cash_from_investing, cash_from_financing, net_cash_flow, data_source, last_updated, created_at
 
-Table: corporate_actions (52,101 rows, 11 columns)
-Fields: id, symbol, action_type, subject, ex_date, record_date, bc_start_date, bc_end_date, face_value, data_source, created_at
+def _default_db_path() -> Optional[Union[str, Path]]:
+    """Best-effort lookup of config.DB_PATH without hard-failing on import."""
+    try:
+        # config.py lives at the App/ root, three levels up from this file.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from config import config  # type: ignore
 
-Table: market_indices (69,038 rows, 16 columns)
-Fields: id, index_name, date, open, high, low, close, volume, data_source, created_at, points_change, change_percent, turnover, pe_ratio, pb_ratio, div_yield
+        return config.DB_PATH
+    except Exception:
+        return None
 
-Table: fii_dii_data (1,429 rows, 9 columns)
-Fields: id, date, fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net, created_at
 
-Table: ipo_data (2,141 rows, 9 columns)
-Fields: id, symbol, company_name, listing_date, issue_price, listing_day_close, listing_day_gain_pct, symbol_mapped, created_at
+def build_schema_section(db_path: Optional[Union[str, Path]] = None) -> str:
+    """
+    Generate the schema portion of the system prompt from the live database.
 
-Table: stock_aliases (894 rows, 7 columns)
-Fields: id, old_name, new_name, nse_symbol, change_date, confidence, created_at
+    Opens the SQLite file read-only, enumerates user tables from sqlite_master,
+    reads columns via PRAGMA table_info and row counts via SELECT COUNT(*), then
+    renders the same "Table: name (N rows, N columns) / Fields: ..." shape the
+    prompt has always used, so model behaviour does not change beyond the facts
+    being correct.
 
-Table: bulk_deals (0 rows, 9 columns)
-Fields: id, symbol, trade_date, client_name, deal_type, quantity, price, data_source, created_at
+    Args:
+        db_path: Path to the SQLite database. Defaults to config.DB_PATH.
 
-Table: block_deals (0 rows, 9 columns)
-Fields: id, symbol, trade_date, client_name, deal_type, quantity, price, data_source, created_at
+    Returns:
+        The formatted DATA SOURCE 1 block. If the database is missing or
+        unreadable this returns a short placeholder telling the model the schema
+        is unavailable - it never raises, because a broken prompt is preferable
+        to a server that will not start.
+    """
+    if db_path is None:
+        db_path = _default_db_path()
 
-Table: india_vix (0 rows, 5 columns)
-Fields: id, date, vix_value, data_source, created_at
+    if not db_path:
+        return _SCHEMA_UNAVAILABLE
 
-Table: download_log (8,736 rows, 7 columns)
-Fields: id, table_name, symbol, status, records_added, error_message, timestamp
+    conn = None
+    try:
+        if not Path(db_path).exists():
+            return _SCHEMA_UNAVAILABLE
 
-Table: metadata (3 rows, 3 columns)
-Fields: key, value, updated_at
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cursor = conn.cursor()
 
-Table: sqlite_sequence (9 rows, 2 columns)
-Fields: name, seq
+        cursor.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+            "ORDER BY name"
+        )
+        table_names = [row[0] for row in cursor.fetchall()]
+        if not table_names:
+            return _SCHEMA_UNAVAILABLE
 
+        priority = {name: idx for idx, name in enumerate(_TABLE_PRIORITY)}
+        table_names.sort(key=lambda n: (priority.get(n, len(priority)), n))
+
+        blocks: List[str] = []
+        total_fields = 0
+
+        for name in table_names:
+            # Identifiers cannot be parameterised; quote-escape instead.
+            quoted = '"' + name.replace('"', '""') + '"'
+
+            columns = [row[1] for row in cursor.execute(f"PRAGMA table_info({quoted})")]
+            if not columns:
+                continue
+
+            try:
+                row_count = cursor.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
+                count_text = f"{row_count:,} rows"
+            except sqlite3.Error:
+                count_text = "row count unavailable"
+
+            total_fields += len(columns)
+            blocks.append(
+                f"Table: {name} ({count_text}, {len(columns)} columns)\n"
+                f"Fields: {', '.join(columns)}"
+            )
+
+        if not blocks:
+            return _SCHEMA_UNAVAILABLE
+
+        header = (
+            f"{_RULE}\n"
+            f"📊 DATA SOURCE 1: SQLITE DATABASE "
+            f"({len(blocks)} Tables, {total_fields} Fields)\n"
+            f"{_RULE}\n"
+        )
+        return header + "\n" + "\n\n".join(blocks) + "\n"
+
+    except (sqlite3.Error, OSError):
+        return _SCHEMA_UNAVAILABLE
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+
+
+# System prompt for display formatting (separate from function calling).
+# SCHEMA_PLACEHOLDER is replaced by build_schema_section() in build_system_prompt().
+SYSTEM_PROMPT_TEMPLATE = """You are an Indian Stock Market AI Assistant with COMPLETE access to 4 data sources.
+
+{schema_section}
 ═══════════════════════════════════════════════════════════════════════════
 📄 DATA SOURCE 2: CF-CA CSV (Corporate Actions) (40,787 rows, 9 columns)
 ═══════════════════════════════════════════════════════════════════════════
@@ -459,7 +582,7 @@ When ticker resolution occurs, inform the user ONLY using structured fields from
 
 Resolution Methods (system handles automatically):
 1. Direct match: Ticker is currently active (no resolution needed)
-2. Demerger correlation: stock_aliases table + CF-CA CSV (high confidence)
+2. Corporate-event correlation: symbol_change_events / name_change_events + CF-CA CSV (high confidence)
 3. Fuzzy name matching: Company name similarity (medium confidence)
 4. Not found: Ticker doesn't exist (provide suggestions)
 
@@ -493,7 +616,7 @@ CORPORATE ACTIONS:
 - "FII/DII flows" → query_stocks(table='fii_dii_data', sort_by='date', sort_order='desc', limit=30)
 - "Recent IPOs" → query_stocks(table='ipo_data', sort_by='listing_date', sort_order='desc', limit=20)
 - "TCS dividends" → query_corporate_actions(ticker='TCS', action_type='Dividend')
-- "Name changes in 2024" → query_stocks(table='stock_aliases', filters={'change_date': {'min': '2024-01-01'}})
+- "Name changes in 2024" → query_stocks(table='name_change_events', filters={'change_date': {'min': '2024-01-01'}})
 
 MARKET DATA:
 - "Nifty 50 performance" → query_stocks(table='market_indices', filters={'index_name': 'NIFTY 50'}, sort_by='date', sort_order='desc', limit=30)
@@ -591,7 +714,8 @@ CRITICAL RULES:
    "Live quote via supported fetcher route"
 
 6. Only use these function tools:
-   query_stocks, calculate_indicators, query_corporate_actions, fetch_stock_data
+   resolve_ticker, fetch_any, query_stocks, calculate_indicators,
+   get_option_chain, query_corporate_actions, fetch_stock_data
    Do NOT call jugaad/nselib methods directly.
 
 7. Execution order (server-enforced):
@@ -643,7 +767,8 @@ Stock Name	Market Cap (₹ Cr)	PE Ratio	ROE (%)	Revenue Growth (%)	Net Profit Ma
 
 Ensure currency uses ₹ with Indian commas and Crores/Lakhs scaling, percentages always show +/− with two decimals, and dates use Indian format (e.g., 17 Oct 2025).
 """
-SYSTEM_PROMPT += """\
+
+SYSTEM_PROMPT_TEMPLATE += """\
 STRICT INDmoney Formatting and Data Rules
 ═══════════════════════════════════════════════════════════════════════════
 
@@ -693,3 +818,49 @@ STRICT INDmoney Formatting and Data Rules
    - INCORRECT: "## 🔍 Key insight here" or "# Important note"
    - This prevents UI rendering issues with large text
 """
+
+
+# ---------------------------------------------------------------------------
+# System prompt assembly
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT_CACHE: Dict[str, str] = {}
+
+
+def build_system_prompt(db_path: Optional[Union[str, Path]] = None) -> str:
+    """
+    Build the full system prompt with a freshly introspected schema section.
+
+    Args:
+        db_path: Path to the SQLite database. Defaults to config.DB_PATH.
+
+    Returns:
+        The complete system prompt string.
+    """
+    if db_path is None:
+        db_path = _default_db_path()
+
+    cache_key = str(db_path)
+    cached = _SYSTEM_PROMPT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    prompt = SYSTEM_PROMPT_TEMPLATE.replace(
+        SCHEMA_PLACEHOLDER, build_schema_section(db_path)
+    )
+    _SYSTEM_PROMPT_CACHE[cache_key] = prompt
+    return prompt
+
+
+def __getattr__(name: str) -> Any:
+    """
+    Lazily materialise ``SYSTEM_PROMPT`` (PEP 562).
+
+    Existing callers do ``from .function_declarations import SYSTEM_PROMPT`` and
+    keep working unchanged, but the database introspection only runs if that
+    attribute is actually touched - importing FUNCTION_DECLARATIONS alone costs
+    nothing. Prefer ``build_system_prompt(db_path)`` in new code.
+    """
+    if name == "SYSTEM_PROMPT":
+        return build_system_prompt()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

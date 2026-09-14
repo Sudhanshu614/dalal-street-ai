@@ -1,0 +1,127 @@
+name: Ticker resolution bug
+description: A company name or symbol resolved to the wrong ticker, to nothing, or with a confidence that does not match the result.
+title: "[resolver] "
+labels: ["bug", "ticker-resolver"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The resolver is the part of this project most likely to be wrong, and reports against it are the most useful ones we get. It walks a confidence-scored cascade and returns at the first tier that hits, so *which* tier answered matters as much as what it answered.
+
+        If you can run the resolver directly, that is the highest-signal thing you can attach:
+
+        ```bash
+        python - <<'PY'
+        import importlib.util, sys
+        spec = importlib.util.spec_from_file_location(
+            "tr", "App/src/data_fetcher/ticker_resolver.py")
+        tr = importlib.util.module_from_spec(spec); sys.modules["tr"] = tr
+        spec.loader.exec_module(tr)
+        print(tr.TickerResolver("App/database/stock_market_new.db").resolve("YOUR QUERY"))
+        PY
+        ```
+
+  - type: input
+    id: query
+    attributes:
+      label: The exact query string
+      description: Verbatim, with the original capitalisation and spacing. Do not clean it up — whitespace and suffixes such as "Limited" are exactly what the normalisation rules act on.
+      placeholder: "Orchid Print India Limited"
+    validations:
+      required: true
+
+  - type: input
+    id: expected-symbol
+    attributes:
+      label: Expected result
+      description: The currently-trading NSE symbol you expected, or the index name for an index query. If you expected no result at all — a delisting or a genuine miss — say so here.
+      placeholder: "ORCHIDPHAR"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-result
+    attributes:
+      label: What was actually returned
+      description: The whole result dict if you have it. Index results carry `resolved_index_name` and have no `resolved_ticker` key at all; `delisted`, `demerger_multiple_children` and `not_found` return `resolved_ticker = None` while still carrying a confidence.
+      render: python
+    validations:
+      required: true
+
+  - type: input
+    id: confidence
+    attributes:
+      label: Confidence score returned
+      description: The `confidence` value from the result. Note that a confident negative is normal — `delisted` returns confidence 100 with no ticker.
+      placeholder: "85"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Which tier fired
+      description: The `resolution_method` string in the result maps directly onto these. Pick the last option if you do not have it.
+      options:
+        - Tier 1 — direct match against active stocks_master (direct)
+        - Tier 1b/1c — ETF direct or normalised match (etf_direct / etf_normalized)
+        - Tier 2 — recursive symbol-change chase via symbol_change_events (symbol_change)
+        - Tier 2.5 — high-confidence fuzzy match on active tickers (fuzzy_match_high_conf)
+        - Tier 2.6 — index alias resolution (index_alias / index_fuzzy)
+        - Tier 3 — company name-change lookup via name_change_events (name_change / name_change_fuzzy)
+        - Tier 4 — explicit delisting check (delisted)
+        - Tier 5 — demerger child correlation via corporate_events (demerger_single_child / demerger_multiple_children)
+        - Tier 6 — not found with suggestions (not_found)
+        - Do not know
+    validations:
+      required: true
+
+  - type: dropdown
+    id: database
+    attributes:
+      label: Which database are you running against
+      description: The sample database contains a small slice of `stocks_master`. A symbol that is genuinely absent from it will miss for reasons that have nothing to do with the resolver.
+      options:
+        - Sample — python scripts/bootstrap_db.py --sample
+        - Full warehouse I built myself — docs/REBUILD.md
+        - The synthetic test fixture — tests/fixtures/build_fixture_db.py
+        - Schema only — python scripts/bootstrap_db.py --schema-only
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence for the expected answer
+      description: How do you know the expected symbol is right? A link to the relevant NSE filing, the row you found in `name_change_events` or `symbol_change_events`, or the chain of renames you followed.
+    validations:
+      required: false
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.11.9"
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        **A good report here becomes a regression test.** Every case filed through this form is a candidate for `tests/test_ticker_resolver.py`, which asserts the resolved symbol, the confidence band *and* the `resolution_method` — so a test cannot pass by reaching the right answer from the wrong tier.
+
+        If you want to send the test alongside the report, `tests/README.md` has the four-step recipe: add synthetic fixture rows to `tests/fixtures/build_fixture_db.py`, check the symbol is not swallowed by an earlier tier, confirm the real behaviour by printing it rather than guessing, then write the assertion. Invent the fixture data — production rows are licence-encumbered NSE data and must never enter the repository.
+
+        Tier ordering is load-bearing and deliberate. Tier 2.5 running before tier 2.6 is what stops "Jio Financial Services" collapsing into the "Nifty Financial Services" index. If your fix reorders tiers, say why the ordering still holds.
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you submit
+      options:
+        - label: This report contains no API keys, tokens, or other credentials.
+          required: true
+        - label: The result above is what the resolver actually returned, not what I remember it returning.
+          required: true

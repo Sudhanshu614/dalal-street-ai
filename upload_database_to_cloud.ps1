@@ -4,8 +4,18 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Configuration
-$BUCKET_NAME = "dalal-street-database-storage"
-$DB_PATH = "e:\Dalal Street Trae\App\database\stock_market_new.db"
+# Project root: PROJECT_ROOT env var wins, otherwise the folder holding this script.
+$ProjectRoot = if ($env:PROJECT_ROOT) { $env:PROJECT_ROOT } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+$BUCKET_NAME = $env:GCS_BUCKET
+if (-not $BUCKET_NAME) {
+    Write-Host "[ERROR] GCS_BUCKET is not set. Export it to the name of your Cloud Storage bucket, e.g. GCS_BUCKET=my-market-db" -ForegroundColor Red
+    exit 1
+}
+
+$DB_PATH = if ($env:DB_PATH) { $env:DB_PATH } else { Join-Path $ProjectRoot "App\database\stock_market_new.db" }
+$CSV_DIRECTORY = if ($env:CSV_DIRECTORY) { $env:CSV_DIRECTORY } else { Join-Path $ProjectRoot "App\database" }
+$LOG_DIR = if ($env:LOG_DIR) { $env:LOG_DIR } else { Join-Path $ProjectRoot "logs" }
 $TIMESTAMP = Get-Date -Format "yyyy-MM-dd_HH-mm"
 
 # Pre-upload validator: parse latest AUTHORITATIVE_DAILY runner summary
@@ -14,7 +24,7 @@ function Test-RunnerSummary {
     $MIN_DAILY_OHLC_ROWS = 1500
     $MIN_FUNDAMENTALS_TOTAL = 1000
     $MIN_FUNDAMENTALS_UPDATED_TODAY = 50
-    $logDir = "e:\Dalal Street Trae\logs"
+    $logDir = $LOG_DIR
     $latestLog = Get-ChildItem -Path $logDir -Filter "AUTHORITATIVE_DAILY_*.log" | Sort-Object LastWriteTime | Select-Object -Last 1
     if (-not $latestLog) { Write-Host "[ERROR] No runner log found" -ForegroundColor Red; return $false }
     $lines = Get-Content $latestLog.FullName | Select-String -Pattern "^SUMMARY_JSON\s+\{" | Select-Object -Last 1
@@ -80,13 +90,13 @@ if ($LASTEXITCODE -eq 0) {
         Write-Host "=================================================" -ForegroundColor Cyan
         
         # Upload latest CF-CA CSV (if present)
-        $CFCA = Get-ChildItem -Path "e:\Dalal Street Trae\App\database" -Filter "CF-CA*.csv" | Sort-Object LastWriteTime | Select-Object -Last 1
+        $CFCA = Get-ChildItem -Path $CSV_DIRECTORY -Filter "CF-CA*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
         if ($CFCA) {
             Write-Host "[3/3] Uploading CF-CA CSV: $($CFCA.Name)" -ForegroundColor Green
             gsutil -m cp "$($CFCA.FullName)" "gs://$BUCKET_NAME/$($CFCA.Name)"
             gsutil -m cp "$($CFCA.FullName)" "gs://$BUCKET_NAME/backups/cfca/$($TIMESTAMP)-$($CFCA.Name)"
         } else {
-            Write-Host "[WARN] No CF-CA CSV found in App\\database" -ForegroundColor Yellow
+            Write-Host "[WARN] No CF-CA CSV found in $CSV_DIRECTORY" -ForegroundColor Yellow
         }
         Write-Host ""
         Write-Host "Next steps:" -ForegroundColor Yellow

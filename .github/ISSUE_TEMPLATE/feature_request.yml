@@ -1,0 +1,88 @@
+name: Feature request
+description: Propose something the project should do that it does not do today.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read `docs/ROADMAP.md` first. It lists what is already planned and, more usefully, what is deliberately missing and why — Postgres support, streaming responses, conversation persistence, consolidating the two ingestion directories, and replacing the screener.in fundamentals scrape are all already tracked. If your idea is on that list, comment on the roadmap item or open a pull request rather than filing a duplicate.
+
+        `CONTRIBUTING.md` ranks contributions by how much they would help. Anything that moves an item up that list is worth proposing.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you cannot do now, or can only do badly? Describe the situation, not the solution — the solution goes in the next field.
+      placeholder: |
+        I want to run this for a small team. SQLite locks under concurrent writes from the
+        ingestion scripts while the API is reading, so the second user gets errors during
+        the daily update window.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you think should change, concretely enough to argue with. Name the files or components you expect it to touch if you know them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else you tried or rejected, and why. This is the field that most often changes the outcome — a workaround that already exists means the feature may not be needed.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: What does this touch
+      options:
+        - Ticker resolver
+        - Data fetching or query building
+        - LLM orchestration / backend
+        - Streamlit frontend
+        - Ingestion pipeline
+        - Database schema or storage backend
+        - Dataset or benchmark export
+        - Tests or CI
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you submit a pull request for this
+      description: No wrong answer. A proposal you cannot implement yourself is still worth filing — this just sets expectations about who does the work.
+      options:
+        - Yes — I intend to implement this
+        - Yes — if someone confirms the approach first
+        - Maybe — I could help with part of it or with testing
+        - No — proposing it for someone else to pick up
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: New dependencies
+      description: If this needs a new package, name it and justify it. The install is already heavy — TA-Lib needs a C toolchain, and scipy plus two NSE libraries come with it. Leave blank if none.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you submit
+      options:
+        - label: I have read `docs/ROADMAP.md` and this is not already listed as planned or deliberately out of scope.
+          required: true
+        - label: This does not require redistributing NSE or aggregator data. See `docs/DATA.md`.
+          required: true

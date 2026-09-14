@@ -1,0 +1,124 @@
+name: Data issue
+description: A value in the warehouse is wrong, missing, or inconsistent — as distinct from the code that reads it.
+title: "[data] "
+labels: ["data"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is for the data itself: a price that does not match the bhavcopy, a corporate action that is absent, a symbol that never made it into `stocks_master`. If the data is right and the code returned the wrong thing, file a **Bug report** instead.
+
+        Two things worth knowing before you file:
+
+        - **The warehouse is yours, not ours.** This repository ships no database — you built the copy you are looking at. A gap in your build is usually an ingestion problem specific to your run, not a defect shared by everyone. `docs/REBUILD.md` documents the manual download steps that are easiest to get wrong.
+        - **`fundamentals`, `quarterly_results`, `annual_financials` and `ipo_data` come from third-party aggregators**, not primary filings — screener.in and Chittorgarh. Discrepancies against a company's actual filing are expected there and are a known limitation, tracked in `docs/DATA.md` and `docs/ROADMAP.md`. Replacing that source is a wanted contribution.
+
+  - type: dropdown
+    id: table
+    attributes:
+      label: Affected table
+      options:
+        - daily_ohlc
+        - market_indices
+        - market_etfs
+        - stocks_master
+        - name_change_events
+        - symbol_change_events
+        - corporate_events
+        - delisting_events
+        - fundamentals
+        - quarterly_results
+        - annual_financials
+        - ipo_data
+        - fii_dii_data
+        - bhavcopy_history
+        - download_log
+        - metadata
+        - More than one table or not sure
+    validations:
+      required: true
+
+  - type: input
+    id: symbol
+    attributes:
+      label: Symbol or company affected
+      description: The symbol as it appears in the table. If the problem is that a symbol is missing entirely, name the symbol you expected.
+      placeholder: "RELIANCE"
+    validations:
+      required: true
+
+  - type: input
+    id: date-range
+    attributes:
+      label: Date or date range affected
+      description: A single date or a range. Say "all dates" if the whole series is affected.
+      placeholder: "2019-04-15 to 2019-04-30"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-value
+    attributes:
+      label: What the value is
+      description: Paste the row. A SQL query and its output is ideal.
+      render: sql
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-value
+    attributes:
+      label: What it should be
+    validations:
+      required: true
+
+  - type: textarea
+    id: source
+    attributes:
+      label: What you verified against
+      description: Name the source and link it if you can — the NSE bhavcopy for that date, the NSE corporate actions page, a company filing, an exchange announcement. "It looks wrong" is not verification; a report without a source cannot be acted on.
+      placeholder: |
+        NSE bhavcopy for 2019-04-15 (sec_bhavdata_full_15042019.csv) gives a close of 1372.55.
+        The warehouse has 137.255 — looks like a decimal shift on ingest.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provenance
+    attributes:
+      label: How was this database built
+      options:
+        - Full rebuild following docs/REBUILD.md
+        - Sample — python scripts/bootstrap_db.py --sample
+        - An export produced by scripts/export_dataset.py
+        - A partial or interrupted rebuild
+        - Something else — described below
+    validations:
+      required: true
+
+  - type: input
+    id: rebuild-date
+    attributes:
+      label: When was that build or its last update run
+      description: Ingestion bugs are often fixed between runs. An approximate date is fine.
+      placeholder: "2026-06-14"
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: How widespread is it
+      description: One row or thousands? Does it affect one symbol or every symbol on that date? If you have a query that counts the affected rows, paste it.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you submit
+      options:
+        - label: I am pasting only the few rows needed to show the problem — not a bulk data dump. Redistributing NSE or aggregator data is a licensing problem, see `docs/DATA.md`.
+          required: true
+        - label: This report contains no API keys, tokens, or other credentials.
+          required: true

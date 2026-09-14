@@ -3,6 +3,29 @@ Natural Language Interface - Provider-Based Architecture
 
 Convert plain English to stock queries using LLM function calling
 
+    ⚠️  NOT WIRED INTO THE REQUEST PATH - THIS MODULE IS CURRENTLY DEAD CODE.
+
+    Nothing in the running application imports ``NaturalLanguageInterface`` or
+    ``ask()``. ``App/api/server.py`` - the only thing that actually serves chat
+    requests - calls the ``google.generativeai`` SDK directly, builds its own
+    chat session, and dispatches tool calls itself.
+
+    Practical consequence: setting ``LLM_PROVIDER`` (in ``.env`` or the
+    environment) HAS NO EFFECT TODAY. The ``provider=`` argument below and
+    ``config.LLM_PROVIDER`` are only consulted if you call this class yourself;
+    the HTTP API never does, and always uses Gemini.
+
+    A second drift to be aware of: ``query()`` dispatches only four functions
+    (query_stocks, calculate_indicators, query_corporate_actions,
+    fetch_stock_data), while ``FUNCTION_DECLARATIONS`` now declares seven -
+    resolve_ticker, fetch_any and get_option_chain would fall through to the
+    "Unknown function" branch here. ``server.py`` handles all seven.
+
+    The code is kept rather than deleted because finishing this abstraction is a
+    tracked item in ``docs/ROADMAP.md`` ("Multi-provider LLM support that
+    actually works"). Until that lands, treat this as a reference
+    implementation, not as live behaviour.
+
 ARCHITECTURE:
 - Provider-based design (Gemini, Groq, or Hybrid)
 - Easy switching between providers via config

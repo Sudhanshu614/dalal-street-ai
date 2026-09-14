@@ -1,111 +1,100 @@
-__pycache__/
-*.pyc
+# =============================================================
+# Dalal Street AI — .gitignore
+#
+# Principle: exclude SECRETS, DATA, and BUILD ARTEFACTS.
+# Never exclude source code by filename pattern.
+#
+# The previous version blanket-ignored test_*.py, check_*.py,
+# analyze_*.py, *.json and *.txt, which silently left the entire
+# ingestion pipeline untracked. Do not reintroduce that.
+# If a file is junk, delete it — do not pattern-ignore it.
+# =============================================================
+
+# -------------------------------------------------------------
+# SECRETS — never commit
+# -------------------------------------------------------------
 .env
+.env.*
+!.env.example
 App/.env
-App/api/.venv/
-logs/
-context.txt
-App/database/*.db
+*service-account*.json
+*credentials*.json
+*.pem
+*.key
+.private/
+
+# -------------------------------------------------------------
+# DATA — excluded for licensing reasons, not just size.
+# See docs/DATA.md before publishing anything you build.
+# -------------------------------------------------------------
 *.db
-App/tests/
-App/docker-compose.yml
-App/start_app.bat
-extra/
-# Google Cloud credentials
-gcp-service-account.json
-
-# ============================================
-# DATABASE FILES
-# ============================================
-
-# Exclude LARGE production databases (1GB+)
-App/database/stock_market_new.db
-App/database/stock_market_backup_*.db
-App/database/stock_market_minimal.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
 App/database/backups/
-App/cache/
+
+# NSE source files the pipeline consumes (user downloads these)
+App/database/*.csv
+App/database/*.xlsx
+
+# Kaggle / dataset export output
+dist/
+export/
+
+# -------------------------------------------------------------
+# CACHES & LOGS
+# -------------------------------------------------------------
 cache/
-App/database/*.db-wal
-App/database/*.db-shm
-
-# ============================================
-# NEW DIRECTORIES (User Specified)
-# ============================================
-App/src/lifecycle/
-App/scriptsrebuild/
-App/scripts/
-Scripts/
-.trae/
-App/utils/
-App/src/utils/
-
-# ============================================
-# CSV DATA FILES
-# ============================================
-App/database/namechange.csv
-App/database/symbolchange.csv
-App/database/stock_master.csv
-App/database/IPO-PastIssue-*.csv
-App/database/CF-CA-*.csv
-App/database/Company_Name_Changes_NSE.xlsx
-
-# ============================================
-# BACKFILL SCRIPTS (Root level App/)
-# ============================================
-App/BACKFILL_*.py
-App/STEP*.py
-App/DAILY_RUNNER.py
-App/backfill_*.py
-App/check_*.py
-App/test_*.py
-
-# ============================================
-# DEBUG & TEST FILES (Root Level)
-# ============================================
-# Debug scripts
-debug_*.py
-simple_debug.py
-quick_test.py
-probe_*.py
-diagnose_*.py
-investigate_*.py
-save_*.py
-
-# Test scripts (root level)
-test_*.py
-verify_*.py
-stress_test_*.py
-demo_*.py
-
-# Analysis scripts
-analyze_*.py
-check_*.py
-comprehensive_*.py
-
-# Output files
-*.txt
-!requirements.txt
-*.json
-!package.json
-!tsconfig.json
+App/cache/
+logs/
+App/logs/
 *.log
-demerger_new_listing_correlations.csv
-similarity_analysis.json
 
-# Markdown debugging docs
-Debugging*.md
-Refining*.md
+# -------------------------------------------------------------
+# PYTHON
+# -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
 
-# Local scripts
-start_backend.ps1
-complete_database_update.ps1
-download_database.sh
-upload_database_to_cloud.ps1
+# -------------------------------------------------------------
+# EDITORS & OS
+# -------------------------------------------------------------
+.vscode/
+.idea/
+.trae/
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# Database files
-company_lifecycle.db
+# -------------------------------------------------------------
+# SCRATCH — historical working directory, not part of the project
+# -------------------------------------------------------------
+extra/
+doc/
+context.txt
 
-# API test scripts
-App/api/test_*.py
+# -------------------------------------------------------------
+# EXPLICIT KEEPS
+# Guard against a future pattern accidentally swallowing these.
+# -------------------------------------------------------------
+!App/**/*.py
+!scripts/**/*.py
+!tests/**/*.py
+!tests/fixtures/**
+!.github/**
+!docs/**
+!*.md
+!requirements*.txt
+!docker-compose.yml
+!pytest.ini

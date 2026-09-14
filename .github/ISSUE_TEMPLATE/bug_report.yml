@@ -1,0 +1,134 @@
+name: Bug report
+description: Code that does not work — a crash, a wrong result, or behaviour that contradicts the docs.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two other forms fit better for two common cases:
+
+        - The resolver returned the wrong symbol for a company or ticker — use **Ticker resolution bug**.
+        - A number in the warehouse is wrong or missing — use **Data issue**.
+
+        Check `docs/ROADMAP.md` first. Several bugs are already listed there with their locations, including the duplicate ingestion directories, the missing `CorporateActionsIngester` import, and the `Scripts/query_index_price.py` casing bug on Linux and macOS.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behaviour. If a query was involved, paste it verbatim.
+      placeholder: |
+        Asked "revenue of Tata Motors in FY23" in the Streamlit UI. The backend returned
+        HTTP 500 and the UI showed "Request failed".
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-expected
+    attributes:
+      label: What you expected instead
+      description: If the docs say it should behave differently, say which document.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Best guess is fine. Pick the last one if you are not sure.
+      options:
+        - Ticker resolver — App/src/data_fetcher/ticker_resolver.py
+        - Universal data fetcher — App/src/data_fetcher/universal_data_fetcher.py
+        - Generic query builder — App/src/data_fetcher/generic_query_builder.py
+        - LLM orchestration / backend — App/api/server.py
+        - Streamlit frontend — App/frontend/streamlit_app.py or streamlit_app.py
+        - Ingestion pipeline — App/scriptsrebuild/ or App/scripts/rebuild/
+        - Database bootstrap — scripts/bootstrap_db.py
+        - Dataset or benchmark export — scripts/export_dataset.py or scripts/build_resolution_benchmark.py
+        - Tests or CI
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: database
+    attributes:
+      label: Which database are you running against
+      description: This changes the answer for almost every bug. The sample database has a small slice of recent data and no long history.
+      options:
+        - Sample — python scripts/bootstrap_db.py --sample
+        - Full warehouse I built myself — docs/REBUILD.md
+        - Schema only — python scripts/bootstrap_db.py --schema-only
+        - None — it failed before a database was involved
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Numbered, from a clean clone if you can. Include the exact commands you ran.
+      placeholder: |
+        1. python scripts/bootstrap_db.py --sample
+        2. python -m uvicorn App.api.server:app --host 127.0.0.1 --port 8000
+        3. curl -s localhost:8000/query -d '{"question": "..."}' -H 'Content-Type: application/json'
+        4. Backend logs the traceback below.
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Full traceback or error output
+      description: The whole thing, not the last line. If there is no traceback, paste the relevant log lines from the backend or Streamlit console.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: Output of `python --version`.
+      placeholder: "3.11.9"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 / Ubuntu 24.04 / macOS 14.5"
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      description: Output of `git rev-parse --short HEAD`.
+      placeholder: "a1b2c3d"
+    validations:
+      required: false
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: Whether it worked before, whether it reproduces on the sample database as well as the full one, anything you already ruled out.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you submit
+      options:
+        - label: This report contains no API keys, tokens, or other credentials — including inside the traceback, the log output, and any screenshot.
+          required: true
+        - label: I have read the known bugs table in `docs/ROADMAP.md` and this is not already listed there.
+          required: true
+        - label: This is not a security vulnerability. Security problems go through private reporting — see `SECURITY.md`.
+          required: true
