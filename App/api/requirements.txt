@@ -14,7 +14,7 @@ python-dotenv>=1.0.0
 # ============================================
 # Note: Order matters - numpy must be installed before scipy
 numpy>=1.24.0
-pandas>=2.0.0
+pandas>=3.0.5
 
 # ============================================
 # SCIENTIFIC COMPUTING
