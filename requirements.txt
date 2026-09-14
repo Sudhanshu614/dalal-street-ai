@@ -1,5 +1,5 @@
 streamlit>=1.28.0
 requests>=2.31.0
-pandas>=2.0.0
+pandas>=3.0.5
 pandas-ta>=0.3.14b0
 TA-Lib>=0.4.29
