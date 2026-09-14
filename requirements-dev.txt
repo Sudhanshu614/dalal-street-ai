@@ -27,7 +27,7 @@ pandas>=2.0,<3.0
 
 # App/config.py imports python-dotenv when available. Installing it means the
 # .env code path is the one under test rather than the ImportError fallback.
-python-dotenv>=1.0,<2.0
+python-dotenv>=1.2.3,<2.0
 
 # --- Security scanning (also run as a non-blocking CI job) ---------------
 pip-audit>=2.7,<3.0
