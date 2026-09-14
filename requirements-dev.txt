@@ -23,7 +23,7 @@ ruff>=0.6,<1.0
 # ticker_resolver.py imports pandas at module scope (for the optional CF-CA
 # CSV loader). Already a runtime dependency in requirements.txt; repeated here
 # so CI can install this file alone.
-pandas>=2.0,<3.0
+pandas>=3.0.5,<4.0
 
 # App/config.py imports python-dotenv when available. Installing it means the
 # .env code path is the one under test rather than the ImportError fallback.
