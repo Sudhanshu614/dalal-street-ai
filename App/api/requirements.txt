@@ -34,7 +34,7 @@ google-generativeai>=0.3.0
 requests>=2.31.0
 python-dateutil>=2.8.0
 pytz>=2023.3
-pandas-ta>=0.3.14b0
+pandas-ta>=0.4.71b0
 TA-Lib>=0.4.29
 
 # ============================================
