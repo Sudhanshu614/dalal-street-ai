@@ -47,6 +47,13 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 Set-Location -Path $PSScriptRoot
 
+# The Windows console defaults to cp1252 and cannot encode the check marks and
+# arrows the Python scripts print, which turns a successful step into a
+# UnicodeEncodeError on its own summary line.
+$env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONUTF8 = '1'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
 $RepoOwner = 'Sudhanshu614'
 $RepoName  = 'dalal-street-ai'
 $StepNum   = 0

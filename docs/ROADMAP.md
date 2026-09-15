@@ -7,6 +7,7 @@ Honest state of the project. Nothing here is hidden from you in the code — it 
 | Issue | Location | Impact |
 |---|---|---|
 | Two overlapping ingestion directories | `App/scriptsrebuild/` vs `App/scripts/rebuild/` | Duplicate scripts with divergent behaviour (`04_daily_nse_update.py` vs `10_daily_update_nse.py`). Confusing for newcomers. |
+| Bookkeeping write is not atomic with the data write | `bhavcopy_downloader.py` `update_daily()` | OHLC rows are committed first, then the `bhavcopy_history` log row. Anything raising in between — historically a `print()` of a non-ASCII character on a Windows cp1252 console — commits the prices and silently skips the log row. Harmless (that table is operational and never exported) but it makes the audit trail lie. Fix: write both in one transaction, or wrap the load so a display error cannot skip it. |
 | `CorporateActionsIngester` import missing | `App/api/server.py` | `/admin/update/corporate_actions` returns 500. Guarded by try/except so the server still starts. |
 | Dead `stock_aliases` SQL | `App/src/data_fetcher/bhavcopy_downloader.py` | Queries a table that was dropped. Dead code path. |
 | Case-sensitive path bug | `Scripts/query_index_price.py` | Uses `App/Database/` (capital D) — fails on Linux/macOS. |

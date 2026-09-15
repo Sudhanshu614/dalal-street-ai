@@ -76,6 +76,12 @@ GAP_WEEKDAY_THRESHOLD = 5
 #: Tables that are legitimately empty in a working install.
 OPTIONAL_TABLES: frozenset = frozenset({"download_log", "bhavcopy_history"})
 
+#: Bookkeeping tables. They record what this machine did, not what the market
+#: did, and they are excluded from every dataset export tier. Their freshness
+#: is reported but never flagged: a gap here means an ingest run crashed after
+#: writing its data but before writing its log line, which costs nothing.
+OPERATIONAL_TABLES: frozenset = frozenset({"download_log", "bhavcopy_history", "metadata"})
+
 
 class Fixture(NamedTuple):
     query: str
@@ -102,17 +108,14 @@ RESOLVER_FIXTURES: Tuple[Fixture, ...] = (
         "ORCHIDPHAR",
         "tier 3  - company name change",
     ),
-    # Tier ordering guard. Stock fuzzy matching deliberately runs before index
-    # alias resolution, so "BANKNIFTY" lands on a tradeable *ticker* (BANKNIFTY1,
-    # EBANKNIFTY, ... - which one depends on what is listed in your database),
-    # never on the NIFTY BANK index. If it ever returns the index, the tier
-    # ordering changed - see README.
-    Fixture(
-        "BANKNIFTY",
-        "(any ticker, not the index)",
-        "tier ordering: stock fuzzy beats index alias",
-        reject="NIFTY BANK",
-    ),
+    # Index nickname. Which answer is "right" here depends on the data: when a
+    # BANKNIFTY-like ticker is listed (BANKNIFTY1, EBANKNIFTY) tier 2.5 catches
+    # it first; when none is listed, tier 2.6 resolves the NIFTY BANK index.
+    # Both are correct behaviour, so this only asserts that something resolves.
+    #
+    # The tier-ordering property itself IS pinned, but in tests/test_ticker_resolver.py
+    # against a synthetic fixture, where the data cannot shift underneath it.
+    Fixture("BANKNIFTY", "(anything)", "index nickname resolves", reject=""),
 )
 
 
@@ -384,7 +387,9 @@ def check_resolver(db_path: Path, report: Report) -> None:
         method = result.get("resolution_method", "?")
         confidence = result.get("confidence", 0)
         got = str(resolved or "").strip().upper()
-        if fixture.reject is not None:
+        if fixture.reject == "":
+            hit = bool(got)                       # anything, as long as it resolved
+        elif fixture.reject is not None:
             hit = bool(got) and got != fixture.reject.upper()
         else:
             hit = got == fixture.expected.upper()
@@ -396,7 +401,9 @@ def check_resolver(db_path: Path, report: Report) -> None:
         )
         if not hit:
             mismatches += 1
-            if fixture.reject is not None:
+            if fixture.reject == "":
+                report.info("        expected any resolution, got nothing")
+            elif fixture.reject is not None:
                 report.info(f"        expected anything EXCEPT {fixture.reject}")
             else:
                 report.info(f"        expected {fixture.expected}")
@@ -408,6 +415,185 @@ def check_resolver(db_path: Path, report: Report) -> None:
         )
     else:
         report.ok(f"all {len(RESOLVER_FIXTURES)} resolver fixtures resolved as expected")
+
+
+#: How many days behind "today" each table is allowed to be before it is
+#: called stale. Trading data should be a day or two old at most; filings and
+#: fundamentals move slowly, so they get more slack.
+STALENESS_BUDGET_DAYS = {
+    "daily_ohlc": 5,
+    "market_indices": 5,
+    "market_etfs": 5,
+    "fii_dii_data": 7,
+    "fundamentals": 30,
+    "quarterly_results": 120,
+    "annual_financials": 400,
+    "stocks_master": 30,
+    "corporate_events": 30,
+    "name_change_events": 90,
+    "symbol_change_events": 90,
+    "delisting_events": 90,
+    "ipo_data": 60,
+}
+
+#: Columns that record WHEN A ROW WAS WRITTEN. These answer the question this
+#: check exists for - "did my last ingest actually put anything in?" - and they
+#: are ISO-formatted, so SQL MAX() is meaningful. Always preferred.
+INGEST_COLUMNS = ("updated_at", "last_updated", "scraped_at", "created_at", "loaded_at")
+
+#: Columns that record WHAT DATE A ROW DESCRIBES. Only used when a table has no
+#: ingestion timestamp. Split by storage format, because that decides whether
+#: SQL MAX() can be trusted.
+ISO_DATE_COLUMNS = ("date", "trade_date")                      # YYYY-MM-DD, sorts correctly
+TEXT_DATE_COLUMNS = ("change_date", "ex_date", "listing_date")  # DD-MON-YYYY, does NOT
+
+#: Formats seen across the warehouse. ISO with a 'T' separator shows up in
+#: `metadata`; NSE filings use DD-MON-YYYY.
+_DATE_FORMATS = (
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d",
+    "%d-%b-%Y", "%d-%B-%Y", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y",
+)
+
+
+def _parse_date(value: str) -> Optional[datetime]:
+    text = str(value).strip()
+    for cut in (text[:19], text[:10], text):
+        for fmt in _DATE_FORMATS:
+            try:
+                return datetime.strptime(cut, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _pick_date_column(columns: Sequence[str]) -> Optional[Tuple[str, bool]]:
+    """
+    Returns (column, sql_max_is_safe).
+
+    An ingestion timestamp is both the most meaningful signal and safely
+    sortable in SQL. A DD-MON-YYYY business date is neither, so it gets
+    maxed in Python instead.
+    """
+    for c in INGEST_COLUMNS:
+        if c in columns:
+            return c, True
+    for c in ISO_DATE_COLUMNS:
+        if c in columns:
+            return c, True
+    for c in TEXT_DATE_COLUMNS:
+        if c in columns:
+            return c, False
+    return None
+
+
+def _newest_value(
+    conn: sqlite3.Connection, table: str, column: str, sql_max_safe: bool
+) -> Optional[str]:
+    if sql_max_safe:
+        try:
+            row = conn.execute(f'SELECT MAX("{column}") FROM "{table}"').fetchone()
+        except sqlite3.Error:
+            return None
+        return str(row[0]) if row and row[0] is not None else None
+
+    # DD-MON-YYYY: SQL MAX() would return whatever sorts highest as a STRING,
+    # which is always something starting "31-". Parse the distinct values and
+    # take a real maximum.
+    try:
+        values = [
+            r[0] for r in conn.execute(
+                f'SELECT DISTINCT "{column}" FROM "{table}" WHERE "{column}" IS NOT NULL'
+            )
+        ]
+    except sqlite3.Error:
+        return None
+    best: Optional[datetime] = None
+    best_raw: Optional[str] = None
+    for v in values:
+        parsed = _parse_date(v)
+        if parsed and (best is None or parsed > best):
+            best, best_raw = parsed, str(v)
+    return best_raw
+
+
+def _days_behind(value: str) -> Optional[int]:
+    parsed = _parse_date(value)
+    return (datetime.now() - parsed).days if parsed else None
+
+
+def check_freshness(conn: sqlite3.Connection, tables: Set[str], report: Report) -> None:
+    """
+    Per-table freshness.
+
+    This answers the question the other checks cannot: "did my last ingest run
+    actually put anything in?" A pipeline step can exit 0, print a cheerful
+    summary, and still have written nothing - the only proof is the newest row.
+    """
+    _section("FRESHNESS")
+    report.info("when each table was last written to, and how long ago that was")
+    print()
+    print(f"  {'table':<24} {'rows':>12}  {'newest':<21} {'from':<13} {'age':<10} status")
+    print(f"  {'-' * 24} {'-' * 12}  {'-' * 21} {'-' * 13} {'-' * 10} ------")
+
+    stale: List[str] = []
+    unknown: List[str] = []
+
+    for table in sorted(tables):
+        if table == "sqlite_sequence":
+            continue
+        try:
+            columns = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')]
+            count = int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+        except sqlite3.Error:
+            continue
+
+        picked = _pick_date_column(columns)
+        if picked is None:
+            print(f"  {table:<24} {count:>12,}  {'(no date column)':<21} {'-':<13} {'-':<10} -")
+            continue
+        column, sql_max_safe = picked
+
+        newest = _newest_value(conn, table, column, sql_max_safe)
+        if newest is None:
+            print(f"  {table:<24} {count:>12,}  {'(empty)':<21} {column:<13} {'-':<10} EMPTY")
+            continue
+
+        age = _days_behind(newest)
+        budget = STALENESS_BUDGET_DAYS.get(table)
+
+        if age is None:
+            age_text, status = "unparseable", "?"
+            unknown.append(f"{table}.{column} = {newest!r}")
+        else:
+            age_text = f"{age}d" if age >= 0 else "future"
+            if table in OPERATIONAL_TABLES:
+                status = "internal"          # reported, never flagged
+            elif budget is None:
+                status = "-"
+            elif age > budget:
+                status = "STALE"
+                stale.append(f"{table} ({age}d old via {column}, budget {budget}d)")
+            else:
+                status = "ok"
+
+        print(f"  {table:<24} {count:>12,}  {newest[:21]:<21} {column:<13} {age_text:<10} {status}")
+
+    print()
+    report.info(
+        "'from' names the column used. An ingestion timestamp (created_at, updated_at) "
+        "means 'when the row was written'; a business date (date, change_date) means "
+        "'what the row is about' and can legitimately be old."
+    )
+    if stale:
+        report.warn(f"{len(stale)} table(s) look stale - the last ingest may not have run")
+        for s in stale:
+            report.info(f"  {s}")
+        report.info("Refresh with: .\\catchup.ps1 -SkipStage -SkipBackup")
+    else:
+        report.ok("every table is within its freshness budget")
+
+    if unknown:
+        report.info(f"unparseable date format in: {', '.join(unknown)}")
 
 
 # --------------------------------------------------------------------------
@@ -474,6 +660,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         tables = check_schema(conn, report)
         check_row_counts(conn, tables, report)
+        check_freshness(conn, tables, report)
         check_daily_ohlc(conn, tables, report)
         check_referential_integrity(conn, tables, report)
     finally:

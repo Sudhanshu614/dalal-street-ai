@@ -158,6 +158,19 @@ For reference, a complete build as of early 2026 produced ~10.2 M `daily_ohlc` r
 
 ## Notes and gotchas
 
+- **Windows: set UTF-8 before running anything.** The console defaults to cp1252 and cannot
+  encode the check marks and arrows the pipeline scripts print. The failure is confusing
+  because the data loads fine and *then* the summary line raises
+  `UnicodeEncodeError: 'charmap' codec can't encode character '✓'`. Fix it once per
+  session:
+
+  ```powershell
+  $env:PYTHONIOENCODING = "utf-8"
+  $env:PYTHONUTF8 = "1"
+  ```
+
+  `catchup.ps1` and `publish.ps1` do this for you.
+
 - **NSE rate-limits aggressively.** The reliability layer (`App/src/reliability/`) throttles to 5 req/s for jugaad-data with exponential backoff. Do not raise it.
 - **`scriptsrebuild/` and `scripts/rebuild/` overlap.** Historical accident — two generations of the pipeline. `scripts/rebuild/unified_data_updater.py` is the newer, more capable fundamentals path. Consolidating these is a tracked issue.
 - **WAL mode is on.** You will see `.db-wal` and `.db-shm` alongside the database. Do not copy the `.db` without checkpointing first, or you will copy a stale snapshot.

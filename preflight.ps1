@@ -204,13 +204,21 @@ if ($phHits.Count -eq 0) { Ok "No unfilled placeholders" }
 else { foreach ($h in $phHits) { Bad "PLACEHOLDER: $h" } }
 
 # Old infrastructure details that should not be public.
+# Patterns that must never reach a public repo. The Windows account name is
+# read from the environment rather than written here - hardcoding it would put
+# the very string we are hunting for into a file that gets committed.
 $personal = @{
-    'Old VM IP (34.x)'   = '34\.45\.213\.224'
-    'Old VM IP (136.x)'  = '136\.115\.41\.222'
-    'Internal IP'        = '10\.209\.27\.197'
-    'Unix username'      = 'sudhanshubawane_work'
-    'Windows username'   = 'shraw'
-    'GCP project id'     = 'gen-lang-client-\d+'
+    'Old VM IP (34.x)'  = '34\.45\.213\.224'
+    'Old VM IP (136.x)' = '136\.115\.41\.222'
+    'Internal IP'       = '10\.209\.27\.197'
+    'Unix username'     = 'sudhanshubawane_work'
+    'GCP project id'    = 'gen-lang-client-\d+'
+}
+if ($env:USERNAME -and $env:USERNAME.Length -ge 4) {
+    $personal['Windows username'] = [regex]::Escape($env:USERNAME)
+}
+if ($env:USERPROFILE) {
+    $personal['Home directory path'] = [regex]::Escape($env:USERPROFILE)
 }
 $pHits = @()
 foreach ($name in $personal.Keys) {

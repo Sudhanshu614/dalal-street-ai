@@ -400,7 +400,7 @@ class BhavcopyDownloader:
         new_tickers = current_tickers - yesterday_tickers if yesterday_tickers else set()
         disappeared_tickers = yesterday_tickers - current_tickers if yesterday_tickers else set()
 
-        # Auto-correlate ticker changes (link disappeared → new tickers)
+        # Auto-correlate ticker changes (link disappeared -> new tickers)
         ticker_changes = []
         if self.enable_demerger_correlation:
             ticker_changes = self._correlate_ticker_changes(
@@ -642,7 +642,7 @@ class BhavcopyDownloader:
                             'confidence': 95
                         })
                         # self._store_ticker_mapping(old_ticker, new_ticker, new_ticker, date, 'isin_match', 95)
-                        print(f"[AUTO-DETECT] Ticker change: {old_ticker} → {new_ticker} (isin_match)")
+                        print(f"[AUTO-DETECT] Ticker change: {old_ticker} -> {new_ticker} (isin_match)")
 
             csv_files = sorted(list(self.db_path.parent.glob('CF-CA-*.csv')))
             cf_path = csv_files[-1] if csv_files else None
@@ -676,7 +676,7 @@ class BhavcopyDownloader:
                                     'company_name': company_name
                                 })
                                 # self._store_ticker_mapping(old_ticker, new_symbol, company_name, date, 'cf_ca_window', 90)
-                                print(f"[AUTO-DETECT] Ticker change: {old_ticker} → {new_symbol} (cf_ca_window)")
+                                print(f"[AUTO-DETECT] Ticker change: {old_ticker} -> {new_symbol} (cf_ca_window)")
 
             cursor.execute("SELECT old_name,new_name,nse_symbol,change_date,confidence FROM stock_aliases")
             alias_rows = cursor.fetchall()
@@ -710,7 +710,7 @@ class BhavcopyDownloader:
                                     'confidence': 85
                                 })
                                 # self._store_ticker_mapping(old_ticker, new_ticker, new_name, date, 'alias_recent', 85)
-                                print(f"[AUTO-DETECT] Ticker change: {old_ticker} → {new_ticker} (alias_recent)")
+                                print(f"[AUTO-DETECT] Ticker change: {old_ticker} -> {new_ticker} (alias_recent)")
 
         except Exception as e:
             print(f"[WARN] Auto-correlation failed: {e}")
@@ -931,7 +931,7 @@ class BhavcopyDownloader:
                     # Check if fallback date already processed
                     check = self.check_date_already_loaded(try_date)
                     if check['exists']:
-                        print(f"  ✓ Data for {try_date.strftime('%Y-%m-%d')} already exists. Stopping fallback.")
+                        print(f"  [OK] Data for {try_date.strftime('%Y-%m-%d')} already exists. Stopping fallback.")
                         return {
                             'date': try_date.strftime('%Y-%m-%d'),
                             'status': 'already_loaded',
@@ -941,10 +941,10 @@ class BhavcopyDownloader:
                     try:
                         df, data_source = self.download_bhavcopy(try_date)
                         proc_date = try_date
-                        print(f"  ✓ Found data for {try_date.strftime('%Y-%m-%d')}")
+                        print(f"  [OK] Found data for {try_date.strftime('%Y-%m-%d')}")
                         break
                     except Exception as err:
-                        print(f"  ✗ Failed: {err}")
+                        print(f"  [FAIL] Failed: {err}")
                         continue
             
             if df is None or data_source is None or len(df) == 0:
@@ -1142,11 +1142,11 @@ class BhavcopyDownloader:
         
         # Summary
         print(f"\n[SUMMARY] OHLC Load Complete")
-        print(f"  ✓ Inserted: {stats['inserted']} new records")
+        print(f"  [OK] Inserted: {stats['inserted']} new records")
         if stats['skipped'] > 0:
             print(f"  ⊘ Skipped: {stats['skipped']} duplicates")
         if stats['failed'] > 0:
-            print(f"  ✗ Failed: {stats['failed']} validation errors")
+            print(f"  [FAIL] Failed: {stats['failed']} validation errors")
             if len(stats['validation_errors']) <= 5:
                 print(f"  Errors:")
                 for err in stats['validation_errors']:
@@ -1287,9 +1287,9 @@ class BhavcopyDownloader:
         skipped_count = sum(1 for r in results if r['status'] == 'skipped')
         failed_count = sum(1 for r in results if r['status'] == 'failed')
         
-        print(f"  ✓ Success: {success_count}")
+        print(f"  [OK] Success: {success_count}")
         print(f"  ⊘ Skipped: {skipped_count}")
-        print(f"  ✗ Failed: {failed_count}")
+        print(f"  [FAIL] Failed: {failed_count}")
         
         return {
             'total_dates': len(results),
